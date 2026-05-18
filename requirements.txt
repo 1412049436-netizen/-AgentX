@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+click
+openai
+requests
+pydantic
+pydantic-settings
