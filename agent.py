@@ -11,8 +11,10 @@ from typing import Dict, Any, List, Optional
 from openai import OpenAI
 
 from config import (
-    LLM_PROVIDER, DEEPSEEK_API_KEY, QWEN_API_KEY, 
-    DEFAULT_MODEL, INTENT_PATTERNS, TOOL_MAPPING
+    LLM_PROVIDER, DEEPSEEK_API_KEY, QWEN_API_KEY, OPENAI_API_KEY,
+    DEEPSEEK_BASE_URL, QWEN_BASE_URL, OPENAI_BASE_URL,
+    OLLAMA_HOST, OLLAMA_MODEL, DEFAULT_MODEL,
+    INTENT_PATTERNS, TOOL_MAPPING
 )
 from mcp_tools import init_db
 
@@ -58,20 +60,40 @@ class AgentX:
         self.tools = TOOLS
         self._init_llm()
         init_db()
-        print(f"{self.name} 初始化完成")
+        print(f"{self.name} 初始化完成 [LLM: {LLM_PROVIDER}, Model: {self.model if self.client else 'rule-only'}]")
     
     def _init_llm(self):
-        """初始化LLM客户端"""
-        api_key = DEEPSEEK_API_KEY or QWEN_API_KEY
+        """初始化LLM客户端（支持Ollama本地/DeepSeek/Qwen/OpenAI）"""
+        if LLM_PROVIDER == "ollama":
+            base_url = f"{OLLAMA_HOST}/v1"
+            api_key = "ollama"  # Ollama 不需要真 key，但 OpenAI 客户端要求非空
+            self.client = OpenAI(api_key=api_key, base_url=base_url)
+            self.model = OLLAMA_MODEL
+            print(f"LLM初始化: Ollama @ {OLLAMA_HOST} | Model: {self.model}")
+            return
+
+        if LLM_PROVIDER == "deepseek":
+            api_key = DEEPSEEK_API_KEY
+            base_url = DEEPSEEK_BASE_URL
+        elif LLM_PROVIDER == "qwen":
+            api_key = QWEN_API_KEY or os.getenv("DASHSCOPE_API_KEY", "")
+            base_url = QWEN_BASE_URL
+        elif LLM_PROVIDER == "openai":
+            api_key = OPENAI_API_KEY
+            base_url = OPENAI_BASE_URL
+        else:
+            api_key = DEEPSEEK_API_KEY
+            base_url = DEEPSEEK_BASE_URL
+
         if not api_key:
-            print("警告: 未设置API Key，使用规则匹配模式")
+            print("警告: 未设置API Key，使用规则匹配模式（无LLM）")
             self.client = None
+            self.model = "rule-only"
             return
         
-        base_url = "https://api.deepseek.com" if LLM_PROVIDER == "deepseek" else "https://dashscope.aliyuncs.com/compatible-mode/v1"
         self.client = OpenAI(api_key=api_key, base_url=base_url)
         self.model = DEFAULT_MODEL
-        print(f"LLM初始化: {self.model}")
+        print(f"LLM初始化: {LLM_PROVIDER} | Model: {self.model}")
     
     def _classify_intent(self, message: str) -> str:
         """意图分类（规则匹配）"""
@@ -116,7 +138,6 @@ class AgentX:
         params = {}
         
         if intent == "query_employee":
-            # 提取部门
             depts = ["技术部", "产品部", "运营部", "销售部", "财务部"]
             for d in depts:
                 if d in message:
@@ -124,7 +145,6 @@ class AgentX:
                     break
         
         elif intent == "query_knowledge":
-            # 提取关键词（简单处理：去掉问号和常见词）
             params["query"] = message.strip()
             for w in ["是什么", "怎么", "如何", "什么是", "?", "？"]:
                 params["query"] = params["query"].replace(w, "").strip()
@@ -160,7 +180,7 @@ class AgentX:
             return f"工具执行失败: {str(e)}"
     
     def _build_context(self, intent: str, message: str, tool_result: str) -> str:
-        """构建上下文��于生成回答"""
+        """构建上下文用于生成回答"""
         context = f"""用户问题: {message}
 工具结果: {tool_result}
 
@@ -170,7 +190,6 @@ class AgentX:
     def _generate_response(self, message: str, context: str) -> str:
         """生成自然语言回答"""
         if not self.client:
-            # 无LLM时直接返回结果
             return context
         
         prompt = f"""你是一个企业智能助手，请根据给定的上下文回答用户问题。
@@ -197,12 +216,10 @@ class AgentX:
     
     async def chat(self, message: str) -> Dict[str, Any]:
         """处理对话"""
-        # 1. 意图识别
         intent = self._classify_intent_llm(message)
         tool_name = TOOL_MAPPING.get(intent)
         
         if not tool_name:
-            # 直接回答
             if self.client:
                 resp = self.client.chat.completions.create(
                     model=self.model,
@@ -220,13 +237,8 @@ class AgentX:
                 "result": None
             }
         
-        # 2. 参数提取
         params = self._extract_params(intent, message)
-        
-        # 3. 执行工具
         tool_result = self._execute_tool(tool_name, params)
-        
-        # 4. 生成回答
         context = self._build_context(intent, message, tool_result)
         answer = self._generate_response(message, context)
         
@@ -257,9 +269,18 @@ def get_agent() -> AgentX:
 
 # ========== API ==========
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-app = FastAPI(title="AgentX API")
+app = FastAPI(title="AgentX API", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ChatRequest(BaseModel):
@@ -302,7 +323,13 @@ async def list_tools():
 @app.get("/health")
 async def health():
     """健康检查"""
-    return {"status": "ok", "agent": "AgentX"}
+    from config import LLM_PROVIDER, DEFAULT_MODEL
+    return {
+        "status": "ok",
+        "agent": "AgentX",
+        "llm_provider": LLM_PROVIDER,
+        "model": DEFAULT_MODEL
+    }
 
 
 # ========== CLI ==========
@@ -321,7 +348,8 @@ def serve():
     import uvicorn
     from config import HOST, PORT
     
-    print(f"启动 AgentX 服务: http://{HOST}:{PORT}")
+    print(f"AgentX 服务启动: http://{HOST}:{PORT}")
+    print(f"LLM Provider: {LLM_PROVIDER}")
     uvicorn.run(app, host=HOST, port=PORT)
 
 

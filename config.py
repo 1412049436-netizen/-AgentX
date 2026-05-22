@@ -1,5 +1,5 @@
 """
-AgentX 配置
+AgentX 配置 - 支持本地/云 LLM 双模式
 """
 
 import os
@@ -10,13 +10,13 @@ AGENT_VERSION = "1.0.0"
 
 # 服务配置
 HOST = "0.0.0.0"
-PORT = 8001
+PORT = int(os.getenv("AGENTX_PORT", "8001"))
 
 # 日志
-LOG_LEVEL = "INFO"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# RAG知识库路径
-RAG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "RAG")
+# RAG知识库路径（容器内可配置）
+RAG_PATH = os.getenv("RAG_PATH", os.path.join(os.path.dirname(os.path.dirname(__file__)), "RAG"))
 
 # MCP工具配置
 TOOLS = {
@@ -38,14 +38,35 @@ TOOLS = {
     }
 }
 
-# LLM配置 - 使用DeepSeek（免费额度）
-LLM_PROVIDER = "deepseek"  # deepseek / qwen / openai
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+# LLM配置 - 支持 ollama / deepseek / qwen / openai
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
 
-# 模型
-DEFAULT_MODEL = "deepseek-chat" if LLM_PROVIDER == "deepseek" else "qwen-turbo"
+# DeepSeek（云端）
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODEL = "deepseek-chat"
+
+# Qwen（云端）
+QWEN_API_KEY = os.getenv("QWEN_API_KEY", "")
+QWEN_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+QWEN_MODEL = "qwen-turbo"
+
+# OpenAI（云端）
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-4o-mini"
+
+# Ollama（本地私有化部署）
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
+# 默认模型（根据LLM_PROVIDER自动选择）
+DEFAULT_MODEL = {
+    "deepseek": DEEPSEEK_MODEL,
+    "qwen": QWEN_MODEL,
+    "openai": OPENAI_MODEL,
+    "ollama": OLLAMA_MODEL,
+}.get(LLM_PROVIDER, DEEPSEEK_MODEL)
 
 # 意图分类
 INTENT_PATTERNS = {
